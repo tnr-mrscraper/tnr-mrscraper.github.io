@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage & Cookie Viewer</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 30px; }
+    h2 { margin-top: 30px; }
+    table { border-collapse: collapse; width: 100%; max-width: 600px; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; word-break: break-all; }
+    th { background-color: #f4f4f4; }
+    .empty { color: #666; font-style: italic; }
+  </style>
+</head>
+<body>
+
+  <h2>LocalStorage Items</h2>
+  <div id="localStorage-output"></div>
+
+  <h2>Cookies</h2>
+  <div id="cookies-output"></div>
+
+  <script>
+    // Helper to safely encode text to HTML to prevent XSS
+    function escapeHTML(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    const lsContainer = document.getElementById('localStorage-output');
+
+    if (localStorage.length === 0) {
+      lsContainer.innerHTML = '<p class="empty">No items found in localStorage for this domain.</p>';
+    } else {
+      let lsTable = '<table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>';
+
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        const value = localStorage.getItem(key);
+
+        lsTable += `<tr>
+          <td><strong>${escapeHTML(key)}</strong></td>
+          <td>${escapeHTML(value)}</td>
+        </tr>`;
+      }
+
+      lsTable += '</tbody></table>';
+      lsContainer.innerHTML = lsTable;
+    }
+
+    document.cookie = "abcdef=ghi; path=/; max-age=86400";
+    // --- 3. RENDER COOKIES ---
+    const cookieContainer = document.getElementById('cookies-output');
+
+    // Helper function to parse document.cookie into key-value pairs
+    function getCookies() {
+      if (!document.cookie) return {};
+      return document.cookie.split(';').reduce((acc, cookieString) => {
+        const [key, ...val] = cookieString.trim().split('=');
+        if (key) {
+          acc[decodeURIComponent(key)] = decodeURIComponent(val.join('='));
+        }
+        return acc;
+      }, {});
+    }
+
+    const cookies = getCookies();
+    const cookieKeys = Object.keys(cookies);
+
+    if (cookieKeys.length === 0) {
+      cookieContainer.innerHTML = '<p class="empty">No cookies found for this domain.</p>';
+    } else {
+      let cookieTable = '<table><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody>';
+
+      for (const key of cookieKeys) {
+        cookieTable += `<tr>
+          <td><strong>${escapeHTML(key)}</strong></td>
+          <td>${escapeHTML(cookies[key])}</td>
+        </tr>`;
+      }
+
+      cookieTable += '</tbody></table>';
+      cookieContainer.innerHTML = cookieTable;
+    }
+  </script>
+
+</body>
+</html>
