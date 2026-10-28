@@ -7,6 +7,8 @@
         body {
         background-color: white; /* Ensure the iframe has a white background */
         }
+
+
         </style>
     </head>
     <body>
@@ -16,6 +18,18 @@
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <title>WebRTC IP Detector</title>
+                <!--
+Driver hooks:
+body[data-state] / #status[data-state] : "idle" | "gathering" | "complete" | "error"
+#user-agent                            : navigator.userAgent (text)
+#user-agent-data                       : navigator.userAgentData JSON (text)
+#ice-candidates tr[data-index]         : one row per candidate
+tr[data-type]                      : host | srflx | prflx | relay
+tr[data-address]                   : the IP/mDNS address
+#report-json                           : full JSON report (parse this)
+window.WEBRTC_REPORT                   : same object, for JS-evaluating drivers
+Typical flow: wait for body[data-state="complete"], then read #report-json.
+-->
                 <style>
                 :root { color-scheme: dark; }
                 * { box-sizing: border-box; }
@@ -37,8 +51,8 @@
                 border-radius: 8px; font: inherit; font-size: 0.9rem; cursor: pointer;
                 }
                 button:disabled { background: #3a3f4a; color: #9aa0aa; cursor: wait; }
-                #copy { background: none; border: 1px solid #3a3f4a; color: #9aa0aa; }
-                #copy:hover:not(:disabled) { color: #fff; border-color: #777; }
+                #btn-copy { background: none; border: 1px solid #3a3f4a; color: #9aa0aa; }
+                #btn-copy:hover:not(:disabled) { color: #fff; border-color: #777; }
                 table { width: 100%; border-collapse: collapse; }
                 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #262a33; font-size: 0.9rem; }
                 th { color: #9aa0aa; font-weight: 600; }
@@ -48,37 +62,41 @@
                 .prflx { background: #332817; color: #ffd27c; }
                 .relay { background: #3d1f17; color: #ff9d7c; }
                 .status { color: #9aa0aa; font-size: 0.85rem; }
+                details { margin-top: 22px; }
+                summary { cursor: pointer; color: #9aa0aa; font-size: 0.9rem; margin-bottom: 8px; }
                 .hint { color: #8a909b; font-size: 0.82rem; margin-top: 18px; }
                 code { color: #c8d0dc; }
                 </style>
             </head>
-            <body>
+            <body data-state="idle">
 
-                <h1>WebRTC IP Detector</h1>
+                <h1 id="title">WebRTC IP Detector</h1>
+
                 <div class="bar">
-                    <button id="start" onclick="run()">Re-run detection</button>
-                    <button id="copy" onclick="copyAll()" disabled>Copy all</button>
-                    <span id="status" class="status">Gathering…</span>
+                    <button id="btn-rerun" onclick="run()">Re-run detection</button>
+                    <button id="btn-copy" onclick="copyAll()" disabled>Copy all</button>
+                    <span id="status" role="status" aria-live="polite" data-state="idle">Idle</span>
                 </div>
 
                 <h2>User Agent</h2>
-                <pre id="ua"></pre>
+                <pre id="user-agent"></pre>
 
                 <h2>User Agent Data (UA-CH)</h2>
-                <pre id="uach"></pre>
+                <pre id="user-agent-data"></pre>
 
                 <h2>ICE Candidates</h2>
-                <table id="table" hidden>
-                    <thead><tr><th>IP address</th><th>Type</th></tr></thead>
-                    <tbody></tbody>
+                <table id="ice-candidates" hidden>
+                    <thead><tr><th scope="col">IP address</th><th scope="col">Type</th></tr></thead>
+                    <tbody id="ice-rows"></tbody>
                 </table>
+
+
 
                 <p class="hint">
                     <span class="tag host">host</span> your LAN IP — Chrome may mask it as <code>*.lan</code> (mDNS);
                     allow “Local Network” access in site settings to see the real address.<br>
-                    <span class="tag srflx">srflx</span> your public IP as seen by STUN — the address remote WebRTC peers use to reach you.
-                    No srflx row usually means symmetric NAT or CGNAT.<br>
-                    <code>navigator.userAgentData</code> is Chrome/Edge-only (UA-CH API); other browsers show a fallback note.
+                    <span class="tag srflx">srflx</span> your public IP as seen by STUN. No srflx row usually means symmetric NAT or CGNAT.<br>
+                    Automation: wait for <code>body[data-state="complete"]</code>, then read <code>#report-json</code>.
                 </p>
 
                 <script>
@@ -91,45 +109,74 @@ const STUN = [
     "stun:stun.cloudflare.com:3478",
 ];
 
-const rows = [];
-const seen = new Set();
-let pc = null, finished = false;
-
 const $ = id => document.getElementById(id);
 const isMdns = a => /\.lan$|\.local$/i.test(a);
+
+let pc = null;
+let rows = [];
+let uachData = null;
+let iceComplete = false;
+let gatherTimer = null;
+const seen = new Set();
+
+function setState(s) {
+    document.body.dataset.state = s;
+    $("status").dataset.state = s;
+}
+
+/* One canonical report object, exposed to drivers. */
+function publishReport() {
+    const report = {
+        generatedAt: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        userAgentData: uachData,
+        iceComplete,
+        candidates: rows,
+    };
+    $("report-json").textContent = JSON.stringify(report, null, 2);
+    $("report").hidden = false;
+    window.WEBRTC_REPORT = report;
+}
 
 /* ---------- User agent info ---------- */
 
 function printUa() {
-    $("ua").textContent = navigator.userAgent;
-
-    const el = $("uach");
-    if (navigator.userAgentData) {
-        const u = navigator.userAgentData;
-        const obj = {
-            brands: u.brands,
-            fullVersionList: u.fullVersionList || null,
-            platform: u.platform,
-            mobile: u.mobile,
-            architecture: u.architecture || null,
-            bitness: u.bitness || null,
-            model: u.model || null,
-            uaGettersAvailable: u.uaGettersAvailable ?? null,
-        };
-        el.textContent = JSON.stringify(obj, null, 2);
-        if (u.getHighEntropyValues) {
-            u.getHighEntropyValues([
-                "architecture", "bitness", "model", "platformVersion", "uaFullVersion", "formFactor"
-            ]).then(h => {
-                    el.textContent = JSON.stringify({ ...obj, ...h }, null, 2);
-                });
-        }
-    } else {
-        el.textContent = "navigator.userAgentData not available (Chrome/Edge only).";
+    $("user-agent").textContent = navigator.userAgent;
+    const el = $("user-agent-data");
+    const u = navigator.userAgentData;
+    if (!u) {
+        uachData = null;
+        el.textContent = "navigator.userAgentData not available (Chromium-only).";
+        return;
+    }
+    const base = {
+        brands: u.brands,
+        fullVersionList: u.fullVersionList || null,
+        platform: u.platform,
+        mobile: u.mobile,
+        architecture: u.architecture || null,
+        bitness: u.bitness || null,
+        model: u.model || null,
+        uaGettersAvailable: u.uaGettersAvailable ?? null,
+    };
+    uachData = { ...base };
+    el.textContent = JSON.stringify(uachData, null, 2);
+    if (u.getHighEntropyValues) {
+        u.getHighEntropyValues([
+            "architecture", "bitness", "model", "platformVersion", "uaFullVersion", "formFactor"
+        ]).then(h => {
+                uachData = { ...base, ...h };
+                el.textContent = JSON.stringify(uachData, null, 2);
+                publishReport();
+            }).catch(() => {});
     }
 }
 
 /* ---------- ICE gathering ---------- */
+
+function typeClass(t) {
+    return t === "srflx" ? "srflx" : t === "relay" ? "relay" : t === "prflx" ? "prflx" : "host";
+}
 
 function addCandidate(c) {
     const m = (c.candidate || "").match(/candidate:\d+\s+\d+\s+\w+\s+\d+\s+(\S+)\s+\d+/);
@@ -138,42 +185,56 @@ function addCandidate(c) {
     const key = c.type + "|" + addr;
     if (seen.has(key)) return;
     seen.add(key);
-    rows.push({ addr, type: c.type });
+    rows.push({ index: rows.length, type: c.type, address: addr, mDNS: isMdns(addr) });
     render();
+    publishReport();
 }
 
 function render() {
-    const tbody = $("table").querySelector("tbody");
+    const tbody = $("ice-rows");
     tbody.innerHTML = "";
-    rows.forEach(r => {
+    rows.forEach((r, i) => {
         const tr = document.createElement("tr");
+        tr.id = "candidate-" + i;
+        tr.dataset.index = i;
+        tr.dataset.type = r.type;
+        tr.dataset.address = r.address;
+        tr.setAttribute("aria-label", r.type + " " + r.address);
         const td1 = document.createElement("td");
-        td1.textContent = r.addr;
+        td1.dataset.field = "address";
+        td1.textContent = r.address;
         const td2 = document.createElement("td");
+        td2.dataset.field = "type";
         const span = document.createElement("span");
-        span.className = "tag " + (r.type === "srflx" ? "srflx" : r.type === "relay" ? "relay" : r.type === "prflx" ? "prflx" : "host");
-        span.textContent = isMdns(r.addr) ? "host (mDNS)" : r.type;
+        span.className = "tag " + typeClass(r.type);
+        span.textContent = r.mDNS ? "host (mDNS)" : r.type;
         td2.appendChild(span);
         tr.append(td1, td2);
         tbody.appendChild(tr);
     });
-    $("table").hidden = rows.length === 0;
-    $("copy").disabled = rows.length === 0;
+    $("ice-candidates").hidden = rows.length === 0;
+    $("btn-copy").disabled = rows.length === 0;
 }
 
 function finish() {
-    if (finished) return;
-    finished = true;
-    if (pc) { pc.onicecandidate = null; pc.onicegatheringstatechange = null; pc.close(); }
-    $("start").disabled = false;
+    if (iceComplete) return;
+    iceComplete = true;
+    clearTimeout(gatherTimer);
+    if (pc) { pc.onicecandidate = null; pc.onicegatheringstatechange = null; pc.close(); pc = null; }
+    $("btn-rerun").disabled = false;
+    setState(rows.length ? "complete" : "error");
     $("status").textContent = rows.length
-        ? `Done — ${rows.length} candidate(s).`
+        ? "Done — " + rows.length + " candidate(s)."
         : "Done — no candidates found. Try another browser or check your network.";
+    publishReport();
 }
 
 async function run() {
-    rows.length = 0; seen.clear(); finished = false; render();
-    $("start").disabled = true;
+    rows.length = 0; seen.clear(); iceComplete = false;
+    render();
+    publishReport();
+    $("btn-rerun").disabled = true;
+    setState("gathering");
     $("status").textContent = "Contacting STUN servers…";
 
     pc = new RTCPeerConnection({ iceServers: STUN.map(u => ({ urls: u })) });
@@ -188,23 +249,27 @@ async function run() {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
     } catch (err) {
+        setState("error");
         $("status").textContent = "Error: " + err.message;
-        finish();
+        publishReport();
+        return;
     }
 
-    setTimeout(finish, 10000); // fallback if gathering never reports complete
+    clearTimeout(gatherTimer);
+    gatherTimer = setTimeout(finish, 10000); // fallback if gathering never reports complete
 }
 
 function copyAll() {
+    const r = window.WEBRTC_REPORT;
+    if (!r) return;
     const parts = [
-        "User-Agent: " + navigator.userAgent,
-        "UserAgentData: " + $("uach").textContent,
-        "",
+        "User-Agent: " + r.userAgent,
+        "UserAgentData: " + JSON.stringify(r.userAgentData),
         "ICE candidates:",
-        ...rows.map(r => `  ${r.type}\t${r.addr}`),
+        ...r.candidates.map(c => "  " + c.type + "\t" + c.address),
     ];
     navigator.clipboard.writeText(parts.join("\n"));
-    $("status").textContent = "Copied.";
+    $("status").textContent = "Copied to clipboard.";
 }
 
 /* ---------- Auto-run on load ---------- */
@@ -217,7 +282,10 @@ window.addEventListener("DOMContentLoaded", () => {
         </html>
 
         <script>
-
+        await page.goto("file:///path/to/webrtc-ip.html");
+        await page.waitForSelector('body[data-state="complete"]', { timeout: 15000 });
+        const report = JSON.parse(await page.textContent("#report-json"));
+        console.log(report.candidates, report.userAgentData);
         </script>
     </body>
 </html>
