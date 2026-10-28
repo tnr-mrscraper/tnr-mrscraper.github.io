@@ -3,290 +3,404 @@
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-        body {
-        background-color: white; /* Ensure the iframe has a white background */
-        }
-
-
-        </style>
-    </head>
-    <body>
-        <!DOCTYPE html>
-        <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <title>WebRTC IP Detector</title>
-                <!--
+        <title>WebRTC IP Detector</title>
+        <!--
 Driver hooks:
-body[data-state] / #status[data-state] : "idle" | "gathering" | "complete" | "error"
+body[data-state] / #status[data-state] : "idle" | "gathering" | "completed" | "error"
 #user-agent                            : navigator.userAgent (text)
 #user-agent-data                       : navigator.userAgentData JSON (text)
+#probe-screen / #probe-hardware /
+#probe-battery  / #probe-storage       : per-group JSON (text)
 #ice-candidates tr[data-index]         : one row per candidate
-tr[data-type]                      : host | srflx | prflx | relay
-tr[data-address]                   : the IP/mDNS address
+tr[data-type]                          : host | srflx | prflx | relay
+tr[data-address]                       : the IP/mDNS address
 #report-json                           : full JSON report (parse this)
 window.WEBRTC_REPORT                   : same object, for JS-evaluating drivers
-Typical flow: wait for body[data-state="complete"], then read #report-json.
+report.probes                          : { screen, hardware, battery, storage }
+report.probesReady                     : true once async probes (battery, storage) settle
+Terminal states: "completed" (>=1 candidate) or "error" (gathering finished, none found).
+Typical flow: wait for body[data-state="completed"], then read #report-json.
 -->
-                <style>
-                :root { color-scheme: dark; }
-                * { box-sizing: border-box; }
-                body {
-                font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-                background: #14161b; color: #e8e8e8;
-                max-width: 760px; margin: 40px auto; padding: 0 20px; line-height: 1.5;
-                }
-                h1 { font-size: 1.3rem; margin: 0 0 4px; }
-                h2 { font-size: 1rem; color: #9aa0aa; margin: 22px 0 8px; text-transform: uppercase; letter-spacing: 0.05em; }
-                pre {
-                background: #1c1f26; border: 1px solid #2a2e38; border-radius: 8px;
-                padding: 12px 14px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;
-                font-size: 0.85rem; margin: 0;
-                }
-                .bar { display: flex; gap: 10px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
-                button {
-                background: #3b82f6; color: #fff; border: 0; padding: 9px 20px;
-                border-radius: 8px; font: inherit; font-size: 0.9rem; cursor: pointer;
-                }
-                button:disabled { background: #3a3f4a; color: #9aa0aa; cursor: wait; }
-                #btn-copy { background: none; border: 1px solid #3a3f4a; color: #9aa0aa; }
-                #btn-copy:hover:not(:disabled) { color: #fff; border-color: #777; }
-                table { width: 100%; border-collapse: collapse; }
-                th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #262a33; font-size: 0.9rem; }
-                th { color: #9aa0aa; font-weight: 600; }
-                .tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.78em; }
-                .host  { background: #173325; color: #7ee2a8; }
-                .srflx { background: #17304d; color: #7cc0ff; }
-                .prflx { background: #332817; color: #ffd27c; }
-                .relay { background: #3d1f17; color: #ff9d7c; }
-                .status { color: #9aa0aa; font-size: 0.85rem; }
-                details { margin-top: 22px; }
-                summary { cursor: pointer; color: #9aa0aa; font-size: 0.9rem; margin-bottom: 8px; }
-                .hint { color: #8a909b; font-size: 0.82rem; margin-top: 18px; }
-                code { color: #c8d0dc; }
-                </style>
-            </head>
-            <body data-state="idle">
+        <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        background: #14161b; color: #e8e8e8;
+        max-width: 760px; margin: 40px auto; padding: 0 20px; line-height: 1.5;
+        }
+        h1 { font-size: 1.3rem; margin: 0 0 4px; }
+        h2 { font-size: 1rem; color: #9aa0aa; margin: 22px 0 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+        pre {
+        background: #1c1f26; border: 1px solid #2a2e38; border-radius: 8px;
+        padding: 12px 14px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+        font-size: 0.85rem; margin: 0;
+        }
+        .bar { display: flex; gap: 10px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
+        button {
+        background: #3b82f6; color: #fff; border: 0; padding: 9px 20px;
+        border-radius: 8px; font: inherit; font-size: 0.9rem; cursor: pointer;
+        }
+        button:disabled { background: #3a3f4a; color: #9aa0aa; cursor: wait; }
+        #btn-copy { background: none; border: 1px solid #3a3f4a; color: #9aa0aa; }
+        #btn-copy:hover:not(:disabled) { color: #fff; border-color: #777; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #262a33; font-size: 0.9rem; }
+        th { color: #9aa0aa; font-weight: 600; }
+        .tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.78em; }
+        .host  { background: #173325; color: #7ee2a8; }
+        .srflx { background: #17304d; color: #7cc0ff; }
+        .prflx { background: #332817; color: #ffd27c; }
+        .relay { background: #3d1f17; color: #ff9d7c; }
+        .status { color: #9aa0aa; font-size: 0.85rem; }
+        details { margin-top: 22px; }
+        summary { cursor: pointer; color: #9aa0aa; font-size: 0.9rem; margin-bottom: 8px; }
+        .hint { color: #8a909b; font-size: 0.82rem; margin-top: 18px; }
+        code { color: #c8d0dc; }
+        </style>
+    </head>
+    <body data-state="idle">
 
-                <h1 id="title">WebRTC IP Detector</h1>
+        <h1 id="title">WebRTC IP Detector</h1>
 
-                <div class="bar">
-                    <button id="btn-rerun" onclick="run()">Re-run detection</button>
-                    <button id="btn-copy" onclick="copyAll()" disabled>Copy all</button>
-                    <span id="status" role="status" aria-live="polite" data-state="idle">Idle</span>
-                </div>
+        <div class="bar">
+            <button id="btn-rerun" onclick="run()">Re-run detection</button>
+            <button id="btn-copy" onclick="copyAll()" disabled>Copy all</button>
+            <span id="status" role="status" aria-live="polite" data-state="idle">Idle</span>
+        </div>
 
-                <h2>User Agent</h2>
-                <pre id="user-agent"></pre>
+        <h2>User Agent</h2>
+        <pre id="user-agent"></pre>
 
-                <h2>User Agent Data (UA-CH)</h2>
-                <pre id="user-agent-data"></pre>
+        <h2>User Agent Data (UA-CH)</h2>
+        <pre id="user-agent-data"></pre>
 
-                <h2>ICE Candidates</h2>
-                <table id="ice-candidates" hidden>
-                    <thead><tr><th scope="col">IP address</th><th scope="col">Type</th></tr></thead>
-                    <tbody id="ice-rows"></tbody>
-                </table>
+        <h2>Screen / Touch</h2>
+        <pre id="probe-screen"></pre>
 
+        <h2>Hardware</h2>
+        <pre id="probe-hardware"></pre>
 
+        <h2>Battery</h2>
+        <pre id="probe-battery"></pre>
 
-                <p class="hint">
-                    <span class="tag host">host</span> your LAN IP — Chrome may mask it as <code>*.lan</code> (mDNS);
-                    allow “Local Network” access in site settings to see the real address.<br>
-                    <span class="tag srflx">srflx</span> your public IP as seen by STUN. No srflx row usually means symmetric NAT or CGNAT.<br>
-                    Automation: wait for <code>body[data-state="complete"]</code>, then read <code>#report-json</code>.
-                </p>
+        <h2>Storage</h2>
+        <pre id="probe-storage"></pre>
 
-                <script>
-const STUN = [
-    "stun:stun.l.google.com:19302",
-    "stun:stun1.l.google.com:19302",
-    "stun:stun2.l.google.com:19302",
-    "stun:stun3.l.google.com:19302",
-    "stun:stun4.l.google.com:19302",
-    "stun:stun.cloudflare.com:3478",
-];
+        <h2>ICE Candidates</h2>
+        <table id="ice-candidates" hidden>
+            <thead><tr><th scope="col">IP address</th><th scope="col">Type</th></thead>
+            <tbody id="ice-rows"></tbody>
+        </table>
 
-const $ = id => document.getElementById(id);
-const isMdns = a => /\.lan$|\.local$/i.test(a);
+        <details id="report" hidden>
+            <summary>Full JSON report</summary>
+            <pre id="report-json"></pre>
+        </details>
 
-let pc = null;
-let rows = [];
-let uachData = null;
-let iceComplete = false;
-let gatherTimer = null;
-const seen = new Set();
-
-function setState(s) {
-    document.body.dataset.state = s;
-    $("status").dataset.state = s;
-}
-
-/* One canonical report object, exposed to drivers. */
-function publishReport() {
-    const report = {
-        generatedAt: new Date().toISOString(),
-        userAgent: navigator.userAgent,
-        userAgentData: uachData,
-        iceComplete,
-        candidates: rows,
-    };
-    $("report-json").textContent = JSON.stringify(report, null, 2);
-    $("report").hidden = false;
-    window.WEBRTC_REPORT = report;
-}
-
-/* ---------- User agent info ---------- */
-
-function printUa() {
-    $("user-agent").textContent = navigator.userAgent;
-    const el = $("user-agent-data");
-    const u = navigator.userAgentData;
-    if (!u) {
-        uachData = null;
-        el.textContent = "navigator.userAgentData not available (Chromium-only).";
-        return;
-    }
-    const base = {
-        brands: u.brands,
-        fullVersionList: u.fullVersionList || null,
-        platform: u.platform,
-        mobile: u.mobile,
-        architecture: u.architecture || null,
-        bitness: u.bitness || null,
-        model: u.model || null,
-        uaGettersAvailable: u.uaGettersAvailable ?? null,
-    };
-    uachData = { ...base };
-    el.textContent = JSON.stringify(uachData, null, 2);
-    if (u.getHighEntropyValues) {
-        u.getHighEntropyValues([
-            "architecture", "bitness", "model", "platformVersion", "uaFullVersion", "formFactor"
-        ]).then(h => {
-                uachData = { ...base, ...h };
-                el.textContent = JSON.stringify(uachData, null, 2);
-                publishReport();
-            }).catch(() => {});
-    }
-}
-
-/* ---------- ICE gathering ---------- */
-
-function typeClass(t) {
-    return t === "srflx" ? "srflx" : t === "relay" ? "relay" : t === "prflx" ? "prflx" : "host";
-}
-
-function addCandidate(c) {
-    const m = (c.candidate || "").match(/candidate:\d+\s+\d+\s+\w+\s+\d+\s+(\S+)\s+\d+/);
-    if (!m) return;
-    const addr = m[1];
-    const key = c.type + "|" + addr;
-    if (seen.has(key)) return;
-    seen.add(key);
-    rows.push({ index: rows.length, type: c.type, address: addr, mDNS: isMdns(addr) });
-    render();
-    publishReport();
-}
-
-function render() {
-    const tbody = $("ice-rows");
-    tbody.innerHTML = "";
-    rows.forEach((r, i) => {
-        const tr = document.createElement("tr");
-        tr.id = "candidate-" + i;
-        tr.dataset.index = i;
-        tr.dataset.type = r.type;
-        tr.dataset.address = r.address;
-        tr.setAttribute("aria-label", r.type + " " + r.address);
-        const td1 = document.createElement("td");
-        td1.dataset.field = "address";
-        td1.textContent = r.address;
-        const td2 = document.createElement("td");
-        td2.dataset.field = "type";
-        const span = document.createElement("span");
-        span.className = "tag " + typeClass(r.type);
-        span.textContent = r.mDNS ? "host (mDNS)" : r.type;
-        td2.appendChild(span);
-        tr.append(td1, td2);
-        tbody.appendChild(tr);
-    });
-    $("ice-candidates").hidden = rows.length === 0;
-    $("btn-copy").disabled = rows.length === 0;
-}
-
-function finish() {
-    if (iceComplete) return;
-    iceComplete = true;
-    clearTimeout(gatherTimer);
-    if (pc) { pc.onicecandidate = null; pc.onicegatheringstatechange = null; pc.close(); pc = null; }
-    $("btn-rerun").disabled = false;
-    setState(rows.length ? "complete" : "error");
-    $("status").textContent = rows.length
-        ? "Done — " + rows.length + " candidate(s)."
-        : "Done — no candidates found. Try another browser or check your network.";
-    publishReport();
-}
-
-async function run() {
-    rows.length = 0; seen.clear(); iceComplete = false;
-    render();
-    publishReport();
-    $("btn-rerun").disabled = true;
-    setState("gathering");
-    $("status").textContent = "Contacting STUN servers…";
-
-    pc = new RTCPeerConnection({ iceServers: STUN.map(u => ({ urls: u })) });
-    pc.createDataChannel("detect");
-
-    pc.onicecandidate = e => { if (e.candidate) addCandidate(e.candidate); };
-    pc.onicegatheringstatechange = () => {
-        if (pc.iceGatheringState === "complete") finish();
-    };
-
-    try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-    } catch (err) {
-        setState("error");
-        $("status").textContent = "Error: " + err.message;
-        publishReport();
-        return;
-    }
-
-    clearTimeout(gatherTimer);
-    gatherTimer = setTimeout(finish, 10000); // fallback if gathering never reports complete
-}
-
-function copyAll() {
-    const r = window.WEBRTC_REPORT;
-    if (!r) return;
-    const parts = [
-        "User-Agent: " + r.userAgent,
-        "UserAgentData: " + JSON.stringify(r.userAgentData),
-        "ICE candidates:",
-        ...r.candidates.map(c => "  " + c.type + "\t" + c.address),
-    ];
-    navigator.clipboard.writeText(parts.join("\n"));
-    $("status").textContent = "Copied to clipboard.";
-}
-
-/* ---------- Auto-run on load ---------- */
-window.addEventListener("DOMContentLoaded", () => {
-    printUa();
-    run();
-});
-                </script>
-            </body>
-        </html>
+        <p class="hint">
+            <span class="tag host">host</span> your LAN IP — Chrome may mask it as <code>*.lan</code> (mDNS);
+            allow “Local Network” access in site settings to see the real address.<br>
+            <span class="tag srflx">srflx</span> your public IP as seen by STUN. No srflx row usually means symmetric NAT or CGNAT.<br>
+            Automation: wait for <code>body[data-state="completed"]</code>, then read <code>#report-json</code>.
+        </p>
 
         <script>
-        await page.goto("file:///path/to/webrtc-ip.html");
-        await page.waitForSelector('body[data-state="complete"]', { timeout: 15000 });
-        const report = JSON.parse(await page.textContent("#report-json"));
-        console.log(report.candidates, report.userAgentData);
+        const STUN = [
+            "stun:stun.l.google.com:19302",
+            "stun:stun1.l.google.com:19302",
+            "stun:stun2.l.google.com:19302",
+            "stun:stun3.l.google.com:19302",
+            "stun:stun4.l.google.com:19302",
+            "stun:stun.cloudflare.com:3478",
+        ];
+
+        const $ = id => document.getElementById(id);
+        const isMdns = a => /\.lan$|\.local$/i.test(a);
+
+        // Canonical state names — keep in sync with the driver.
+        const STATE = { IDLE: "idle", GATHERING: "gathering", COMPLETED: "completed", ERROR: "error" };
+
+        let pc = null;
+        let rows = [];
+        let uachData = null;
+        let iceComplete = false;
+        let gatherTimer = null;
+        const seen = new Set();
+
+        // Device probes.
+        let battery = null;
+        let asyncProbesPending = 0;
+        const probes = { screen: null, hardware: null, battery: null, storage: null };
+
+        function setState(s) {
+            document.body.dataset.state = s;
+            const status = $("status");
+            if (status) status.dataset.state = s;
+        }
+
+        /* One canonical report object, exposed to drivers.
+       Never throws: even if a DOM element is missing, the report is
+       still available on window.WEBRTC_REPORT. */
+        function publishReport() {
+            const report = {
+                state: document.body.dataset.state || STATE.IDLE,
+                generatedAt: new Date().toISOString(),
+                userAgent: navigator.userAgent,
+                userAgentData: uachData,
+                probes: {
+                    screen: probes.screen,
+                    hardware: probes.hardware,
+                    battery: probes.battery,
+                    storage: probes.storage,
+                },
+                probesReady: asyncProbesPending === 0,
+                iceComplete,
+                candidates: rows,
+            };
+            window.WEBRTC_REPORT = report;
+            const pre = $("report-json");
+            if (pre) pre.textContent = JSON.stringify(report, null, 2);
+            const box = $("report");
+            if (box) box.hidden = false;
+        }
+
+        /* ---------- User agent info ---------- */
+
+        function printUa() {
+            $("user-agent").textContent = navigator.userAgent;
+            const el = $("user-agent-data");
+            const u = navigator.userAgentData;
+            if (!u) {
+                uachData = null;
+                el.textContent = "navigator.userAgentData not available (Chromium-only).";
+                return;
+            }
+            const base = {
+                brands: u.brands,
+                fullVersionList: u.fullVersionList || null,
+                platform: u.platform,
+                mobile: u.mobile,
+                architecture: u.architecture || null,
+                bitness: u.bitness || null,
+                model: u.model || null,
+                uaGettersAvailable: u.uaGettersAvailable ?? null,
+            };
+            uachData = { ...base };
+            el.textContent = JSON.stringify(uachData, null, 2);
+            if (u.getHighEntropyValues) {
+                u.getHighEntropyValues([
+                    "architecture", "bitness", "model", "platformVersion", "uaFullVersion", "formFactor"
+                ]).then(h => {
+                        uachData = { ...base, ...h };
+                        el.textContent = JSON.stringify(uachData, null, 2);
+                        publishReport();
+                    }).catch(() => {});
+            }
+        }
+
+        /* ---------- Device probes ---------- */
+
+        // Infinity (time unknowable) serializes as null in JSON — normalize explicitly.
+        const finite = v => (v === null || v === undefined || Number.isFinite(v)) ? v : null;
+
+        function batterySnapshot(b) {
+            return {
+                charging: b.charging,
+                level: b.level,
+                chargingTime: finite(b.chargingTime),
+                dischargingTime: finite(b.dischargingTime),
+            };
+        }
+
+        function renderProbes() {
+            const paint = (id, obj, absent) => {
+                const el = $(id);
+                if (el) el.textContent = obj ? JSON.stringify(obj, null, 2) : absent;
+            };
+            paint("probe-screen", probes.screen, "screen not available.");
+            paint("probe-hardware", probes.hardware, "not available.");
+            paint("probe-battery", probes.battery, "navigator.getBattery() not available (Chromium-only).");
+            paint("probe-storage", probes.storage, "navigator.storage.estimate() not available.");
+        }
+
+        function settleProbe() {
+            asyncProbesPending = Math.max(0, asyncProbesPending - 1);
+            renderProbes();
+            publishReport();
+        }
+
+        function onBatteryChange() {
+            if (!battery) return;
+            probes.battery = batterySnapshot(battery);
+            renderProbes();
+            publishReport();
+        }
+
+        function runProbes() {
+            asyncProbesPending = 0;
+
+            // Synchronous: screen, touch, CPU.
+            probes.screen = {
+                colorDepth: screen.colorDepth,
+                width: screen.width,
+                height: screen.height,
+                maxTouchPoints: navigator.maxTouchPoints || 0,
+            };
+            probes.hardware = {
+                hardwareConcurrency: navigator.hardwareConcurrency || null,
+            };
+
+            // Async: battery (Chromium-only). Live object — re-publish on events.
+            if (typeof navigator.getBattery === "function") {
+                asyncProbesPending++;
+                navigator.getBattery().then(b => {
+                    battery = b;
+                    probes.battery = batterySnapshot(b);
+                    b.addEventListener("chargingchange", onBatteryChange);
+                    b.addEventListener("levelchange", onBatteryChange);
+                    settleProbe();
+                }).catch(() => {
+                        probes.battery = { error: "getBattery() failed" };
+                        settleProbe();
+                    });
+            }
+
+            // Async: storage estimate (includes usage, free from the same promise).
+            if (navigator.storage && typeof navigator.storage.estimate === "function") {
+                asyncProbesPending++;
+                navigator.storage.estimate().then(est => {
+                    probes.storage = { quota: est.quota, usage: est.usage ?? null };
+                    settleProbe();
+                }).catch(() => {
+                        probes.storage = { error: "storage.estimate() failed" };
+                        settleProbe();
+                    });
+            }
+
+            renderProbes();
+            publishReport();
+        }
+
+        /* ---------- ICE gathering ---------- */
+
+        function typeClass(t) {
+            return t === "srflx" ? "srflx" : t === "relay" ? "relay" : t === "prflx" ? "prflx" : "host";
+        }
+
+        function addCandidate(c) {
+            const m = (c.candidate || "").match(/candidate:\d+\s+\d+\s+\w+\s+\d+\s+(\S+)\s+\d+/);
+            if (!m) return;
+            const addr = m[1];
+            const key = c.type + "|" + addr;
+            if (seen.has(key)) return;
+            seen.add(key);
+            rows.push({ index: rows.length, type: c.type, address: addr, mDNS: isMdns(addr) });
+            render();
+            publishReport();
+        }
+
+        function render() {
+            const tbody = $("ice-rows");
+            tbody.innerHTML = "";
+            rows.forEach((r, i) => {
+                const tr = document.createElement("tr");
+                tr.id = "candidate-" + i;
+                tr.dataset.index = i;
+                tr.dataset.type = r.type;
+                tr.dataset.address = r.address;
+                tr.setAttribute("aria-label", r.type + " " + r.address);
+                const td1 = document.createElement("td");
+                td1.dataset.field = "address";
+                td1.textContent = r.address;
+                const td2 = document.createElement("td");
+                td2.dataset.field = "type";
+                const span = document.createElement("span");
+                span.className = "tag " + typeClass(r.type);
+                span.textContent = r.mDNS ? "host (mDNS)" : r.type;
+                td2.appendChild(span);
+                tr.append(td1, td2);
+                tbody.appendChild(tr);
+            });
+            $("ice-candidates").hidden = rows.length === 0;
+            $("btn-copy").disabled = rows.length === 0;
+        }
+
+        function finish() {
+            if (iceComplete) return;
+            iceComplete = true;
+            clearTimeout(gatherTimer);
+            if (pc) { pc.onicecandidate = null; pc.onicegatheringstatechange = null; pc.close(); pc = null; }
+            $("btn-rerun").disabled = false;
+            setState(rows.length ? STATE.COMPLETED : STATE.ERROR);
+            $("status").textContent = rows.length
+                ? "Done — " + rows.length + " candidate(s)."
+                : "Done — no candidates found. Try another browser or check your network.";
+            publishReport();
+        }
+
+        async function run() {
+            rows.length = 0; seen.clear(); iceComplete = false;
+            setState(STATE.GATHERING);
+            $("status").textContent = "Contacting STUN servers…";
+            render();
+            publishReport();
+            $("btn-rerun").disabled = true;
+
+            if (typeof RTCPeerConnection === "undefined") {
+                setState(STATE.ERROR);
+                $("status").textContent = "RTCPeerConnection not available in this browser.";
+                publishReport();
+                return;
+            }
+
+            pc = new RTCPeerConnection({ iceServers: STUN.map(u => ({ urls: u })) });
+            pc.createDataChannel("detect");
+
+            pc.onicecandidate = e => { if (e.candidate) addCandidate(e.candidate); };
+            pc.onicegatheringstatechange = () => {
+                if (pc.iceGatheringState === "complete") finish();
+            };
+
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+            } catch (err) {
+                setState(STATE.ERROR);
+                $("status").textContent = "Error: " + err.message;
+                publishReport();
+                return;
+            }
+
+            clearTimeout(gatherTimer);
+            gatherTimer = setTimeout(finish, 10000); // fallback if gathering never reports complete
+        }
+
+        function copyAll() {
+            const r = window.WEBRTC_REPORT;
+            if (!r) return;
+            const parts = [
+                "User-Agent: " + r.userAgent,
+                "UserAgentData: " + JSON.stringify(r.userAgentData),
+                "Probes: " + JSON.stringify(r.probes),
+                "ICE candidates:",
+                ...r.candidates.map(c => "  " + c.type + "\t" + c.address),
+            ];
+            navigator.clipboard.writeText(parts.join("\n"));
+            $("status").textContent = "Copied to clipboard.";
+        }
+
+        /* ---------- Auto-run on load ---------- */
+        function init() {
+            printUa();
+            runProbes();
+            run();
+        }
+        if (document.readyState === "loading") {
+            window.addEventListener("DOMContentLoaded", init);
+        } else {
+            init();
+        }
         </script>
     </body>
 </html>
-
